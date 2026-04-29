@@ -4,7 +4,10 @@ import { fileURLToPath } from "node:url";
 
 const PROVIDER_ID = "openai-compatible";
 const EXTENSION_DIR = dirname(fileURLToPath(import.meta.url));
+const AGENT_DIR = join(EXTENSION_DIR, "..", "..");
 const CONFIG_PATH = join(EXTENSION_DIR, "provider-config.json");
+const AUTH_PATH = join(AGENT_DIR, "auth.json");
+const SETTINGS_PATH = join(AGENT_DIR, "settings.json");
 
 function normalizeBaseUrl(value: string): string {
   const trimmed = value.trim().replace(/\/+$/, "");
@@ -92,6 +95,126 @@ async function clearConfig(): Promise<void> {
   try {
     await rm(CONFIG_PATH);
   } catch {}
+}
+
+async function loadJsonFile(path: string): Promise<any | null> {
+  try {
+    const raw = await readFile(path, "utf8");
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+async function saveJsonFile(path: string, value: any): Promise<void> {
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+}
+
+async function loadAuthStore(): Promise<any> {
+  return (await loadJsonFile(AUTH_PATH)) || {};
+}
+
+function buildAuthRecord(config: any): any {
+  const record = {
+    provider: PROVIDER_ID,
+    name: String(config.name || "OpenAI Compatible"),
+    baseUrl: normalizeBaseUrl(String(config.baseUrl || "")),
+    apiKey: String(config.apiKey || ""),
+    api: "openai-completions",
+    defaultModelId: config.defaultModelId
+      ? String(config.defaultModelId)
+      : undefined,
+    authenticated: Boolean(config.apiKey),
+    updatedAt: new Date().toISOString(),
+  };
+
+  return Object.fromEntries(
+    Object.entries(record).filter(([, value]) => value !== undefined),
+  );
+}
+
+async function syncAuthStore(config: any): Promise<void> {
+  const authStore = await loadAuthStore();
+  const authRecord = buildAuthRecord(config);
+
+  authStore.providers = {
+    ...(authStore.providers && typeof authStore.providers === "object"
+      ? authStore.providers
+      : {}),
+    [PROVIDER_ID]: {
+      ...(authStore.providers?.[PROVIDER_ID] || {}),
+      ...authRecord,
+    },
+  };
+
+  authStore[PROVIDER_ID] = {
+    ...(authStore[PROVIDER_ID] && typeof authStore[PROVIDER_ID] === "object"
+      ? authStore[PROVIDER_ID]
+      : {}),
+    ...authRecord,
+  };
+
+  authStore.defaultProvider = PROVIDER_ID;
+  authStore.currentProvider = PROVIDER_ID;
+  authStore.authenticatedProviders = Array.from(
+    new Set([
+      ...(Array.isArray(authStore.authenticatedProviders)
+        ? authStore.authenticatedProviders
+        : []),
+      PROVIDER_ID,
+    ]),
+  );
+
+  await saveJsonFile(AUTH_PATH, authStore);
+}
+
+async function clearAuthStore(): Promise<void> {
+  const authStore = await loadAuthStore();
+  let changed = false;
+
+  if (authStore.providers?.[PROVIDER_ID]) {
+    delete authStore.providers[PROVIDER_ID];
+    changed = true;
+  }
+
+  if (authStore[PROVIDER_ID]) {
+    delete authStore[PROVIDER_ID];
+    changed = true;
+  }
+
+  if (Array.isArray(authStore.authenticatedProviders)) {
+    const filtered = authStore.authenticatedProviders.filter(
+      (providerId: any) => providerId !== PROVIDER_ID,
+    );
+    if (filtered.length !== authStore.authenticatedProviders.length) {
+      authStore.authenticatedProviders = filtered;
+      changed = true;
+    }
+  }
+
+  if (authStore.defaultProvider === PROVIDER_ID) {
+    delete authStore.defaultProvider;
+    changed = true;
+  }
+
+  if (authStore.currentProvider === PROVIDER_ID) {
+    delete authStore.currentProvider;
+    changed = true;
+  }
+
+  if (changed) {
+    await saveJsonFile(AUTH_PATH, authStore);
+  }
+}
+
+async function syncSettings(config: any): Promise<void> {
+  const settings = (await loadJsonFile(SETTINGS_PATH)) || {};
+  settings.defaultProvider = PROVIDER_ID;
+  if (config.defaultModelId) {
+    settings.defaultModel = String(config.defaultModelId);
+  }
+  await saveJsonFile(SETTINGS_PATH, settings);
 }
 
 function getModelsUrl(baseUrl: string): string {
@@ -244,6 +367,8 @@ async function registerFromConfig(
     (await fetchModels(config.baseUrl, config.apiKey)).models;
   const provider = buildProviderConfig(config, models);
   pi.registerProvider(PROVIDER_ID, provider);
+  await syncAuthStore(config);
+  await syncSettings(config);
   return { provider, models: provider.models };
 }
 
@@ -255,6 +380,8 @@ async function registerSetupProvider(pi: any): Promise<void> {
     (await loadDiscoveredModels()) ||
     (await fetchModels(config.baseUrl, config.apiKey)).models;
   pi.registerProvider(PROVIDER_ID, buildProviderConfig(config, models));
+  await syncAuthStore(config);
+  await syncSettings(config);
 }
 
 async function promptForConfig(ctx: any, defaults?: any): Promise<any | null> {
@@ -380,6 +507,8 @@ export default async function (pi: any) {
 
         await saveConfig(config);
         await saveDiscoveredModels(discovered.models);
+        await syncAuthStore(config);
+        await syncSettings(config);
 
         pi.unregisterProvider(PROVIDER_ID);
         pi.registerProvider(
@@ -450,6 +579,8 @@ export default async function (pi: any) {
         );
         await saveConfig(config);
         await saveDiscoveredModels(discovered.models);
+        await syncAuthStore(config);
+        await syncSettings(config);
         ctx.ui.notify(
           `Refreshed ${discovered.models.length} model(s) for ${config.name}`,
           "info",
@@ -468,6 +599,7 @@ export default async function (pi: any) {
     handler: async (_args: string, ctx: any) => {
       await clearConfig();
       await clearDiscoveredModels();
+      await clearAuthStore();
       pi.unregisterProvider(PROVIDER_ID);
       ctx.ui.notify("OpenAI-compatible provider removed", "info");
     },
