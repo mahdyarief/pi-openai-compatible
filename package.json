@@ -1,0 +1,24 @@
+{
+  "name": "pi-openai-compatible",
+  "version": "0.70.6",
+  "description": "Pi extension for configuring OpenAI-compatible providers with guided setup and model discovery.",
+  "type": "module",
+  "license": "MIT",
+  "keywords": [
+    "pi",
+    "pi-extension",
+    "openai-compatible",
+    "llm",
+    "provider"
+  ],
+  "scripts": {
+    "clean": "echo 'nothing to clean'",
+    "build": "echo 'nothing to build'",
+    "check": "echo 'nothing to check'"
+  },
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
