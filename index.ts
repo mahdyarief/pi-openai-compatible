@@ -437,7 +437,7 @@ export default async function (pi: any) {
         (event?.reason === "startup" || event?.reason === "reload")
       ) {
         ctx.ui.notify(
-          "Run /openai-compatible-setup to configure OpenAI Compatible.",
+          "Run /openai-compatible-login to configure OpenAI Compatible.",
           "info",
         );
         return;
@@ -475,9 +475,9 @@ export default async function (pi: any) {
     }
   });
 
-  pi.registerCommand("openai-compatible-setup", {
+  pi.registerCommand("openai-compatible-login", {
     description:
-      "Create or update an OpenAI-compatible provider and auto-fetch its models",
+      "Login to an OpenAI-compatible provider and auto-fetch its models",
     handler: async (_args: string, ctx: any) => {
       const existing = await loadConfig();
       const config = await promptForConfig(ctx, existing || undefined);
@@ -555,7 +555,7 @@ export default async function (pi: any) {
       const config = await loadConfig();
       if (!config) {
         ctx.ui.notify(
-          "No saved provider config. Run /openai-compatible-setup first.",
+          "No saved provider config. Run /openai-compatible-login first.",
           "warning",
         );
         return;

@@ -5,7 +5,7 @@
 Initial public version.
 
 ### Added
-- guided setup flow with `/openai-compatible-setup`
+- guided login flow with `/openai-compatible-login`
 - model refresh command with `/openai-compatible-refresh`
 - cleanup command with `/openai-compatible-clear`
 - automatic model discovery from OpenAI-compatible providers

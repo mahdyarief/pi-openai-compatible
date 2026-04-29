@@ -13,7 +13,7 @@ It then fetches the provider's available models, saves the configuration locally
 
 ## Features
 
-- clean setup flow with `/openai-compatible-setup`
+- clean login flow with `/openai-compatible-login`
 - works with OpenAI-compatible APIs
 - auto-fetches models from the provider
 - lets you choose a default model during setup
@@ -38,12 +38,12 @@ Clone the repository into your Pi extensions directory and reload Pi.
 
 After installation, run:
 
-- `/openai-compatible-setup`
+- `/openai-compatible-login`
 
 ## Commands
 
-### `/openai-compatible-setup`
-Guided setup flow.
+### `/openai-compatible-login`
+Guided login flow.
 
 What it does:
 1. asks for provider name
@@ -81,7 +81,7 @@ Example:
 
 Recommended flow:
 1. reload Pi
-2. run `/openai-compatible-setup`
+2. run `/openai-compatible-login`
 3. complete the prompts
 4. use `/model` if you want to switch away from the saved default model
 
