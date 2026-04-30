@@ -4,21 +4,22 @@
   "description": "Pi extension for configuring OpenAI-compatible providers with guided setup and model discovery.",
   "type": "module",
   "license": "MIT",
-  "keywords": [
-    "pi",
-    "pi-extension",
-    "openai-compatible",
-    "llm",
-    "provider"
-  ],
+  "keywords": ["pi", "pi-extension", "openai-compatible", "llm", "provider"],
   "scripts": {
     "clean": "echo 'nothing to clean'",
     "build": "echo 'nothing to build'",
-    "check": "echo 'nothing to check'"
+    "check": "node --test index.test.ts",
+    "typecheck": "tsc --noEmit",
+    "format": "biome check .",
+    "lint": "biome check .",
+    "knip": "knip"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^1.9.4",
+    "knip": "^5.61.3",
+    "typescript": "^5.9.3"
   },
   "pi": {
-    "extensions": [
-      "./index.ts"
-    ]
+    "extensions": ["./index.ts"]
   }
 }

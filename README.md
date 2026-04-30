@@ -1,6 +1,6 @@
 # pi-openai-compatible
 
-A Pi extension that lets you configure and use any OpenAI-compatible provider with a clean setup flow.
+A Pi extension that lets you configure and use multiple OpenAI-compatible providers with a clean setup flow.
 
 Instead of relying on `/login`, this extension gives you a guided command-based setup that asks for:
 
@@ -9,16 +9,19 @@ Instead of relying on `/login`, this extension gives you a guided command-based 
 - API key
 - default model
 
-It then fetches the provider's available models, saves the configuration locally, and auto-selects your preferred default model.
+It then fetches the provider's available models, saves the provider profile locally, and auto-selects your preferred default model.
 
 ## Features
 
 - clean login flow with `/openai-compatible-login`
 - works with OpenAI-compatible APIs
-- auto-fetches models from the provider
+- supports multiple saved provider profiles with different base URLs
+- upserts provider profiles by provider name
+- auto-fetches models from each provider
 - lets you choose a default model during setup
-- remembers your saved provider config
-- supports refreshing models later
+- remembers the last selected model per provider
+- registers only the active provider on startup
+- supports switching, listing, refreshing, and clearing providers later
 - supports custom token pricing rules in the extension code
 - avoids the confusing `/login` UX for custom providers
 
@@ -51,11 +54,30 @@ What it does:
 3. asks for API key
 4. fetches available models
 5. lets you choose a default model
-6. saves config and cached models
-7. auto-selects the chosen default model
+6. creates or updates the saved provider profile by provider name
+7. caches the models for that provider
+8. activates the provider and auto-selects the chosen default model
+
+### `/openai-compatible-list`
+Shows all saved provider profiles.
+
+What it shows:
+- provider name
+- base URL
+- active marker
+- default or last selected model
+
+### `/openai-compatible-switch`
+Switches to another saved provider profile.
+
+What it does:
+- loads cached models for the selected provider
+- registers that provider into Pi
+- restores its last selected model if available
+- falls back to the configured default model
 
 ### `/openai-compatible-refresh`
-Refreshes the model list from the saved provider config.
+Refreshes the model list from the active provider config.
 
 Useful when:
 - the provider adds new models
@@ -63,13 +85,15 @@ Useful when:
 - you want to refresh cached model metadata
 
 ### `/openai-compatible-clear`
-Removes saved config and cached models for this extension.
+Removes one saved provider or all saved providers.
 
 ## How it works
 
-The extension registers a provider with the ID:
+The extension registers the active provider with a concrete provider ID derived from its name.
 
-- `openai-compatible`
+Examples:
+- `openai-compatible:diyproxy`
+- `openai-compatible:work-proxy`
 
 Model display names are automatically prefixed with your chosen provider name.
 
@@ -83,7 +107,8 @@ Recommended flow:
 1. reload Pi
 2. run `/openai-compatible-login`
 3. complete the prompts
-4. use `/model` if you want to switch away from the saved default model
+4. use `/model` if you want to switch models inside the active provider
+5. use `/openai-compatible-switch` if you want to activate another saved provider
 
 ## Example provider setup
 
@@ -98,9 +123,12 @@ The extension will try common OpenAI-compatible model endpoints automatically, i
 
 During setup, you can choose a default model from the fetched model list.
 
-On later startup or reload, the extension will:
-- try to select your saved default model first
-- fall back to the first available fetched model if the saved default no longer exists
+After you switch models in Pi, the extension remembers the last selected model for that provider.
+
+On later startup, reload, or provider switch, the extension will:
+- try to restore the saved last selected model first
+- fall back to the configured default model
+- fall back to the first available cached model if needed
 
 ## Pricing
 
@@ -116,14 +144,15 @@ All other models default to zero cost unless you add more pricing rules.
 
 The extension stores local data in its own directory:
 
-- `provider-config.json` — saved provider config
-- `provider-models.json` — cached discovered models
+- `provider-config.json` — saved provider profiles and active provider state
+- `provider-models.json` — cached discovered models keyed by provider id
 
 These files may contain sensitive information such as API keys, so do not commit them to a public repository.
 
 ## Limitations
 
 - this extension does not use Pi `/login`
+- only the active saved provider is registered on startup
 - pricing is not fetched from the provider API; it is defined manually in code
 - model capabilities are inferred from model IDs and API metadata, so some providers may need custom adjustments
 

@@ -2,16 +2,74 @@ import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const PROVIDER_ID = "openai-compatible";
+export const EXTENSION_PROVIDER_PREFIX = "openai-compatible";
+const CONFIG_VERSION = 2;
 const EXTENSION_DIR = dirname(fileURLToPath(import.meta.url));
 const AGENT_DIR = join(EXTENSION_DIR, "..", "..");
 const CONFIG_PATH = join(EXTENSION_DIR, "provider-config.json");
 const AUTH_PATH = join(AGENT_DIR, "auth.json");
+const AGENT_MODELS_PATH = join(AGENT_DIR, "models.json");
 const SETTINGS_PATH = join(AGENT_DIR, "settings.json");
+const MODELS_PATH = join(EXTENSION_DIR, "provider-models.json");
+
+type ModelRecord = {
+  id: string;
+  name?: string;
+  [key: string]: any;
+};
+
+type ProviderProfile = {
+  id: string;
+  name: string;
+  nameKey: string;
+  baseUrl: string;
+  apiKey: string;
+  defaultModelId?: string;
+  lastModelId?: string;
+  previousProvider?: string;
+  previousModel?: string;
+  updatedAt?: string;
+};
+
+type StoredConfig = {
+  version: number;
+  activeProviderId?: string;
+  providers: ProviderProfile[];
+};
+
+type AgentModelsRegistry = {
+  providers: Record<string, any>;
+};
 
 function normalizeBaseUrl(value: string): string {
-  const trimmed = value.trim().replace(/\/+$/, "");
-  return trimmed;
+  return value.trim().replace(/\/+$/, "");
+}
+
+export function canonicalizeProviderName(value: string): string {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ");
+}
+
+function slugifyProviderName(value: string): string {
+  return (
+    canonicalizeProviderName(value)
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "") || "provider"
+  );
+}
+
+export function getProviderId(name: string): string {
+  return `${EXTENSION_PROVIDER_PREFIX}:${slugifyProviderName(name)}`;
+}
+
+function isExtensionProviderId(value: any): boolean {
+  return (
+    typeof value === "string" &&
+    (value === EXTENSION_PROVIDER_PREFIX ||
+      value.startsWith(`${EXTENSION_PROVIDER_PREFIX}:`))
+  );
 }
 
 function getCandidateBaseUrls(value: string): string[] {
@@ -77,24 +135,194 @@ function getModelCost(modelId: string): {
   };
 }
 
-async function loadConfig(): Promise<any | null> {
-  try {
-    const raw = await readFile(CONFIG_PATH, "utf8");
-    return JSON.parse(raw);
-  } catch {
-    return null;
+export function buildStoredConfig(input: any): ProviderProfile {
+  const name = String(input?.name || "OpenAI Compatible").trim();
+  const nameKey = canonicalizeProviderName(name);
+
+  return Object.fromEntries(
+    Object.entries({
+      id: String(input?.id || getProviderId(name)),
+      name,
+      nameKey,
+      baseUrl: normalizeBaseUrl(String(input?.baseUrl || "")),
+      apiKey: String(input?.apiKey || "").trim(),
+      defaultModelId: input?.defaultModelId
+        ? String(input.defaultModelId)
+        : undefined,
+      lastModelId: input?.lastModelId ? String(input.lastModelId) : undefined,
+      previousProvider: input?.previousProvider
+        ? String(input.previousProvider)
+        : undefined,
+      previousModel: input?.previousModel
+        ? String(input.previousModel)
+        : undefined,
+      updatedAt: input?.updatedAt || new Date().toISOString(),
+    }).filter(([, value]) => value !== undefined),
+  ) as ProviderProfile;
+}
+
+export function buildStoredConfigFromLegacy(input: any): StoredConfig {
+  const provider = buildStoredConfig(input);
+  return {
+    version: CONFIG_VERSION,
+    activeProviderId: provider.id,
+    providers: [provider],
+  };
+}
+
+export function ensureStoredConfig(input: any): StoredConfig {
+  if (
+    input &&
+    typeof input === "object" &&
+    !Array.isArray(input) &&
+    input.version === CONFIG_VERSION &&
+    Array.isArray(input.providers)
+  ) {
+    return {
+      version: CONFIG_VERSION,
+      activeProviderId:
+        typeof input.activeProviderId === "string"
+          ? input.activeProviderId
+          : undefined,
+      providers: input.providers.map((provider: any) =>
+        buildStoredConfig(provider),
+      ),
+    };
   }
+
+  if (
+    input &&
+    typeof input === "object" &&
+    !Array.isArray(input) &&
+    (input.name || input.baseUrl || input.apiKey || input.defaultModelId)
+  ) {
+    return buildStoredConfigFromLegacy(input);
+  }
+
+  return {
+    version: CONFIG_VERSION,
+    activeProviderId: undefined,
+    providers: [],
+  };
 }
 
-async function saveConfig(config: any): Promise<void> {
-  await mkdir(dirname(CONFIG_PATH), { recursive: true });
-  await writeFile(CONFIG_PATH, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+export function ensureAgentModelsRegistry(input: any): AgentModelsRegistry {
+  if (
+    input &&
+    typeof input === "object" &&
+    !Array.isArray(input) &&
+    input.providers &&
+    typeof input.providers === "object" &&
+    !Array.isArray(input.providers)
+  ) {
+    return {
+      providers: { ...input.providers },
+    };
+  }
+
+  if (input && typeof input === "object" && !Array.isArray(input)) {
+    return {
+      providers: { ...input },
+    };
+  }
+
+  return {
+    providers: {},
+  };
 }
 
-async function clearConfig(): Promise<void> {
-  try {
-    await rm(CONFIG_PATH);
-  } catch {}
+export function putProviderProfile(
+  config: StoredConfig,
+  profile: ProviderProfile,
+): StoredConfig {
+  const nextProfile = buildStoredConfig(profile);
+  const nextProviders = config.providers.filter(
+    (provider) => provider.nameKey !== nextProfile.nameKey,
+  );
+  nextProviders.push(nextProfile);
+
+  return {
+    version: CONFIG_VERSION,
+    activeProviderId: config.activeProviderId,
+    providers: nextProviders,
+  };
+}
+
+export function removeProviderProfile(
+  config: StoredConfig,
+  providerId: string,
+): StoredConfig {
+  const providers = config.providers.filter(
+    (provider) => provider.id !== providerId,
+  );
+  return {
+    version: CONFIG_VERSION,
+    activeProviderId:
+      config.activeProviderId === providerId
+        ? undefined
+        : config.activeProviderId,
+    providers,
+  };
+}
+
+function getProviderById(
+  config: StoredConfig,
+  providerId?: string,
+): ProviderProfile | null {
+  if (!providerId) return null;
+  return (
+    config.providers.find((provider) => provider.id === providerId) || null
+  );
+}
+
+function getProviderByName(
+  config: StoredConfig,
+  name: string,
+): ProviderProfile | null {
+  const nameKey = canonicalizeProviderName(name);
+  return (
+    config.providers.find((provider) => provider.nameKey === nameKey) || null
+  );
+}
+
+export function updateProviderLastModel(
+  config: StoredConfig,
+  providerId: string,
+  modelId?: string,
+): StoredConfig {
+  return {
+    ...config,
+    providers: config.providers.map((provider) =>
+      provider.id === providerId
+        ? buildStoredConfig({
+            ...provider,
+            lastModelId: modelId || provider.lastModelId,
+          })
+        : provider,
+    ),
+  };
+}
+
+export function getProviderSelectionModelId(
+  provider: any,
+  models: ModelRecord[],
+): string | undefined {
+  const modelIds = new Set(models.map((model) => model.id));
+  if (provider?.lastModelId && modelIds.has(String(provider.lastModelId))) {
+    return String(provider.lastModelId);
+  }
+  if (
+    provider?.defaultModelId &&
+    modelIds.has(String(provider.defaultModelId))
+  ) {
+    return String(provider.defaultModelId);
+  }
+  return models[0]?.id;
+}
+
+export function getProviderCacheEntry(registry: any, providerId: string): any {
+  const normalized = ensureAgentModelsRegistry(registry);
+  return normalized.providers[providerId] || null;
 }
 
 async function loadJsonFile(path: string): Promise<any | null> {
@@ -111,19 +339,191 @@ async function saveJsonFile(path: string, value: any): Promise<void> {
   await writeFile(path, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
 
+async function loadConfig(): Promise<StoredConfig> {
+  const raw = await loadJsonFile(CONFIG_PATH);
+  return ensureStoredConfig(raw);
+}
+
+async function saveConfig(config: StoredConfig): Promise<void> {
+  await saveJsonFile(CONFIG_PATH, ensureStoredConfig(config));
+}
+
+async function clearConfig(): Promise<void> {
+  try {
+    await rm(CONFIG_PATH);
+  } catch {}
+}
+
 async function loadAuthStore(): Promise<any> {
   return (await loadJsonFile(AUTH_PATH)) || {};
 }
 
-function buildAuthRecord(config: any): any {
-  const record = {
-    provider: PROVIDER_ID,
+async function loadSettingsStore(): Promise<any> {
+  return (await loadJsonFile(SETTINGS_PATH)) || {};
+}
+
+export function buildPreviousSelection(authStore: any, settings: any): any {
+  const authPreviousProvider =
+    authStore.currentProvider || authStore.defaultProvider || undefined;
+  const settingsPreviousProvider = settings.defaultProvider || undefined;
+  const previousProvider =
+    authPreviousProvider && !isExtensionProviderId(authPreviousProvider)
+      ? authPreviousProvider
+      : settingsPreviousProvider &&
+          !isExtensionProviderId(settingsPreviousProvider)
+        ? settingsPreviousProvider
+        : undefined;
+
+  const previousModel =
+    settings.defaultModel && !isExtensionProviderId(settings.defaultProvider)
+      ? settings.defaultModel
+      : undefined;
+
+  return Object.fromEntries(
+    Object.entries({
+      previousProvider,
+      previousModel,
+    }).filter(([, value]) => value !== undefined),
+  );
+}
+
+export function applyCurrentSelection(settings: any, config: any): any {
+  const nextSettings =
+    settings && typeof settings === "object" && !Array.isArray(settings)
+      ? { ...settings }
+      : {};
+
+  if (
+    !config.previousProvider &&
+    nextSettings.defaultProvider &&
+    !isExtensionProviderId(nextSettings.defaultProvider)
+  ) {
+    config.previousProvider = String(nextSettings.defaultProvider);
+  }
+
+  if (
+    !config.previousModel &&
+    !isExtensionProviderId(nextSettings.defaultProvider) &&
+    nextSettings.defaultModel
+  ) {
+    config.previousModel = String(nextSettings.defaultModel);
+  }
+
+  nextSettings.defaultProvider = String(config.id || EXTENSION_PROVIDER_PREFIX);
+  if (config.defaultModelId) {
+    nextSettings.defaultModel = String(config.defaultModelId);
+  }
+
+  return nextSettings;
+}
+
+export function buildRestoredSettings(settings: any, config: any): any {
+  const nextSettings =
+    settings && typeof settings === "object" && !Array.isArray(settings)
+      ? { ...settings }
+      : {};
+  const wasUsingExtension = isExtensionProviderId(nextSettings.defaultProvider);
+
+  if (wasUsingExtension) {
+    if (config?.previousProvider) {
+      nextSettings.defaultProvider = String(config.previousProvider);
+    } else {
+      nextSettings.defaultProvider = undefined;
+    }
+  }
+
+  if (config?.previousModel) {
+    nextSettings.defaultModel = String(config.previousModel);
+  } else if (wasUsingExtension) {
+    nextSettings.defaultModel = undefined;
+  }
+
+  return Object.fromEntries(
+    Object.entries(nextSettings).filter(([, value]) => value !== undefined),
+  );
+}
+
+export function mergeProviderModelsRegistry(
+  registry: any,
+  providerId: string,
+  config: any,
+  models: any[],
+): AgentModelsRegistry {
+  const nextRegistry = ensureAgentModelsRegistry(registry);
+
+  nextRegistry.providers[providerId] = {
+    provider: providerId,
     name: String(config.name || "OpenAI Compatible"),
     baseUrl: normalizeBaseUrl(String(config.baseUrl || "")),
     apiKey: String(config.apiKey || ""),
     api: "openai-completions",
     defaultModelId: config.defaultModelId
       ? String(config.defaultModelId)
+      : undefined,
+    updatedAt: new Date().toISOString(),
+    models,
+  };
+
+  return nextRegistry;
+}
+
+export function removeProviderModelsRegistryEntry(
+  registry: any,
+  providerId: string,
+): AgentModelsRegistry {
+  const nextRegistry = ensureAgentModelsRegistry(registry);
+  delete nextRegistry.providers[providerId];
+  return nextRegistry;
+}
+
+async function loadModelsRegistry(): Promise<any> {
+  return (await loadJsonFile(MODELS_PATH)) || {};
+}
+
+async function saveModelsRegistry(registry: any): Promise<void> {
+  await saveJsonFile(MODELS_PATH, registry);
+}
+
+async function syncAgentModelsRegistry(
+  providerId: string,
+  config: ProviderProfile,
+  models: any[],
+): Promise<void> {
+  const registry = ensureAgentModelsRegistry(
+    await loadJsonFile(AGENT_MODELS_PATH),
+  );
+  const nextRegistry = mergeProviderModelsRegistry(
+    registry,
+    providerId,
+    config,
+    models,
+  );
+  await saveJsonFile(AGENT_MODELS_PATH, nextRegistry);
+}
+
+async function clearAgentModelsRegistry(providerId: string): Promise<void> {
+  const registry = ensureAgentModelsRegistry(
+    await loadJsonFile(AGENT_MODELS_PATH),
+  );
+  const nextRegistry = removeProviderModelsRegistryEntry(registry, providerId);
+  await saveJsonFile(AGENT_MODELS_PATH, nextRegistry);
+}
+
+function buildAuthRecord(providerId: string, config: ProviderProfile): any {
+  const record = {
+    provider: providerId,
+    name: String(config.name || "OpenAI Compatible"),
+    baseUrl: normalizeBaseUrl(String(config.baseUrl || "")),
+    apiKey: String(config.apiKey || ""),
+    api: "openai-completions",
+    defaultModelId: config.defaultModelId
+      ? String(config.defaultModelId)
+      : undefined,
+    previousProvider: config.previousProvider
+      ? String(config.previousProvider)
+      : undefined,
+    previousModel: config.previousModel
+      ? String(config.previousModel)
       : undefined,
     authenticated: Boolean(config.apiKey),
     updatedAt: new Date().toISOString(),
@@ -134,58 +534,68 @@ function buildAuthRecord(config: any): any {
   );
 }
 
-async function syncAuthStore(config: any): Promise<void> {
+async function syncAuthStore(config: ProviderProfile): Promise<void> {
   const authStore = await loadAuthStore();
-  const authRecord = buildAuthRecord(config);
+  const settings = await loadSettingsStore();
+  const previousSelection = buildPreviousSelection(authStore, settings);
+  const nextConfig = buildStoredConfig({
+    ...config,
+    previousProvider:
+      config.previousProvider || previousSelection.previousProvider,
+    previousModel: config.previousModel || previousSelection.previousModel,
+  });
+  const authRecord = buildAuthRecord(nextConfig.id, nextConfig);
 
   authStore.providers = {
     ...(authStore.providers && typeof authStore.providers === "object"
       ? authStore.providers
       : {}),
-    [PROVIDER_ID]: {
-      ...(authStore.providers?.[PROVIDER_ID] || {}),
+    [nextConfig.id]: {
+      ...(authStore.providers?.[nextConfig.id] || {}),
       ...authRecord,
     },
   };
 
-  authStore[PROVIDER_ID] = {
-    ...(authStore[PROVIDER_ID] && typeof authStore[PROVIDER_ID] === "object"
-      ? authStore[PROVIDER_ID]
+  authStore[nextConfig.id] = {
+    ...(authStore[nextConfig.id] && typeof authStore[nextConfig.id] === "object"
+      ? authStore[nextConfig.id]
       : {}),
     ...authRecord,
   };
 
-  authStore.defaultProvider = PROVIDER_ID;
-  authStore.currentProvider = PROVIDER_ID;
+  authStore.defaultProvider = nextConfig.id;
+  authStore.currentProvider = nextConfig.id;
   authStore.authenticatedProviders = Array.from(
     new Set([
       ...(Array.isArray(authStore.authenticatedProviders)
         ? authStore.authenticatedProviders
         : []),
-      PROVIDER_ID,
+      nextConfig.id,
     ]),
   );
 
   await saveJsonFile(AUTH_PATH, authStore);
 }
 
-async function clearAuthStore(): Promise<void> {
+async function clearAuthStore(providerId: string): Promise<void> {
   const authStore = await loadAuthStore();
+  const providerRecord =
+    authStore.providers?.[providerId] || authStore[providerId] || {};
   let changed = false;
 
-  if (authStore.providers?.[PROVIDER_ID]) {
-    delete authStore.providers[PROVIDER_ID];
+  if (authStore.providers?.[providerId]) {
+    delete authStore.providers[providerId];
     changed = true;
   }
 
-  if (authStore[PROVIDER_ID]) {
-    delete authStore[PROVIDER_ID];
+  if (authStore[providerId]) {
+    delete authStore[providerId];
     changed = true;
   }
 
   if (Array.isArray(authStore.authenticatedProviders)) {
     const filtered = authStore.authenticatedProviders.filter(
-      (providerId: any) => providerId !== PROVIDER_ID,
+      (savedProviderId: any) => savedProviderId !== providerId,
     );
     if (filtered.length !== authStore.authenticatedProviders.length) {
       authStore.authenticatedProviders = filtered;
@@ -193,13 +603,21 @@ async function clearAuthStore(): Promise<void> {
     }
   }
 
-  if (authStore.defaultProvider === PROVIDER_ID) {
-    delete authStore.defaultProvider;
+  if (authStore.defaultProvider === providerId) {
+    if (providerRecord.previousProvider) {
+      authStore.defaultProvider = providerRecord.previousProvider;
+    } else {
+      authStore.defaultProvider = undefined;
+    }
     changed = true;
   }
 
-  if (authStore.currentProvider === PROVIDER_ID) {
-    delete authStore.currentProvider;
+  if (authStore.currentProvider === providerId) {
+    if (providerRecord.previousProvider) {
+      authStore.currentProvider = providerRecord.previousProvider;
+    } else {
+      authStore.currentProvider = undefined;
+    }
     changed = true;
   }
 
@@ -208,13 +626,19 @@ async function clearAuthStore(): Promise<void> {
   }
 }
 
-async function syncSettings(config: any): Promise<void> {
-  const settings = (await loadJsonFile(SETTINGS_PATH)) || {};
-  settings.defaultProvider = PROVIDER_ID;
-  if (config.defaultModelId) {
-    settings.defaultModel = String(config.defaultModelId);
+async function syncSettings(config: ProviderProfile): Promise<void> {
+  const settings = await loadSettingsStore();
+  const nextSettings = applyCurrentSelection(settings, config);
+  await saveJsonFile(SETTINGS_PATH, nextSettings);
+}
+
+async function restoreSettings(config?: ProviderProfile | null): Promise<void> {
+  const settings = await loadSettingsStore();
+  const nextSettings = buildRestoredSettings(settings, config || null);
+
+  if (JSON.stringify(nextSettings) !== JSON.stringify(settings)) {
+    await saveJsonFile(SETTINGS_PATH, nextSettings);
   }
-  await saveJsonFile(SETTINGS_PATH, settings);
 }
 
 function getModelsUrl(baseUrl: string): string {
@@ -317,7 +741,10 @@ async function fetchModels(
   return { models, resolvedBaseUrl };
 }
 
-function buildProviderConfig(config: any, models: any[]): any {
+export function buildRegisteredProviderConfig(
+  config: ProviderProfile,
+  models: any[],
+): any {
   const providerLabel = String(config.name || "OpenAI Compatible");
   return {
     baseUrl: normalizeBaseUrl(
@@ -330,58 +757,26 @@ function buildProviderConfig(config: any, models: any[]): any {
       baseUrl: normalizeBaseUrl(
         String(config.baseUrl || "https://diyproxy.fly.dev/v1"),
       ),
-      name: `${providerLabel} / ${model.name.split(" / ").slice(-1)[0]}`,
+      name: `${providerLabel} / ${
+        String(model.name || model.id)
+          .split(" / ")
+          .slice(-1)[0]
+      }`,
     })),
   };
 }
 
-const MODELS_PATH = join(EXTENSION_DIR, "provider-models.json");
-
-async function loadDiscoveredModels(): Promise<any[] | null> {
-  try {
-    const raw = await readFile(MODELS_PATH, "utf8");
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : null;
-  } catch {
-    return null;
-  }
-}
-
-async function saveDiscoveredModels(models: any[]): Promise<void> {
-  await mkdir(dirname(MODELS_PATH), { recursive: true });
-  await writeFile(MODELS_PATH, `${JSON.stringify(models, null, 2)}\n`, "utf8");
-}
-
-async function clearDiscoveredModels(): Promise<void> {
-  try {
-    await rm(MODELS_PATH);
-  } catch {}
-}
-
-async function registerFromConfig(
+async function registerProviderInstance(
   pi: any,
-  config: any,
+  config: ProviderProfile,
+  models: any[],
 ): Promise<{ provider: any; models: any[] }> {
-  const models =
-    (await loadDiscoveredModels()) ||
-    (await fetchModels(config.baseUrl, config.apiKey)).models;
-  const provider = buildProviderConfig(config, models);
-  pi.registerProvider(PROVIDER_ID, provider);
+  const provider = buildRegisteredProviderConfig(config, models);
+  pi.registerProvider(config.id, provider);
   await syncAuthStore(config);
+  await syncAgentModelsRegistry(config.id, config, provider.models);
   await syncSettings(config);
   return { provider, models: provider.models };
-}
-
-async function registerSetupProvider(pi: any): Promise<void> {
-  const config = await loadConfig();
-  if (!config) return;
-
-  const models =
-    (await loadDiscoveredModels()) ||
-    (await fetchModels(config.baseUrl, config.apiKey)).models;
-  pi.registerProvider(PROVIDER_ID, buildProviderConfig(config, models));
-  await syncAuthStore(config);
-  await syncSettings(config);
 }
 
 async function promptForConfig(ctx: any, defaults?: any): Promise<any | null> {
@@ -413,11 +808,92 @@ async function promptForConfig(ctx: any, defaults?: any): Promise<any | null> {
   };
 }
 
+async function activateProvider(
+  pi: any,
+  ctx: any,
+  configState: StoredConfig,
+  provider: ProviderProfile,
+  models: any[],
+  options?: { notify?: boolean },
+): Promise<StoredConfig> {
+  const previousActive = getProviderById(
+    configState,
+    configState.activeProviderId,
+  );
+  const currentModel = ctx.model;
+  let nextConfig = configState;
+
+  if (
+    previousActive &&
+    currentModel?.provider === previousActive.id &&
+    currentModel?.id
+  ) {
+    nextConfig = updateProviderLastModel(
+      nextConfig,
+      previousActive.id,
+      currentModel.id,
+    );
+  }
+
+  if (previousActive && previousActive.id !== provider.id) {
+    pi.unregisterProvider(previousActive.id);
+  }
+
+  const selectedModelId = getProviderSelectionModelId(provider, models);
+  const activeProvider = buildStoredConfig({
+    ...provider,
+    defaultModelId: provider.defaultModelId || selectedModelId,
+  });
+
+  await registerProviderInstance(pi, activeProvider, models);
+
+  nextConfig = putProviderProfile(nextConfig, activeProvider);
+  nextConfig.activeProviderId = activeProvider.id;
+  await saveConfig(nextConfig);
+
+  if (selectedModelId) {
+    const model = ctx.modelRegistry?.find?.(activeProvider.id, selectedModelId);
+    if (model) {
+      await pi.setModel(model);
+      nextConfig = updateProviderLastModel(
+        nextConfig,
+        activeProvider.id,
+        selectedModelId,
+      );
+      await saveConfig(nextConfig);
+    }
+  }
+
+  if (options?.notify !== false) {
+    ctx.ui.notify(`Active provider: ${activeProvider.name}`, "info");
+  }
+
+  return nextConfig;
+}
+
+function formatProviderSummary(
+  provider: ProviderProfile,
+  isActive: boolean,
+): string {
+  const marker = isActive ? "*" : "-";
+  const model =
+    provider.lastModelId || provider.defaultModelId || "no model selected";
+  return `${marker} ${provider.name} — ${provider.baseUrl} — ${model}`;
+}
+
 export default async function (pi: any) {
   const initialConfig = await loadConfig();
-  if (initialConfig) {
+  const initialProvider = getProviderById(
+    initialConfig,
+    initialConfig.activeProviderId,
+  );
+  if (initialProvider) {
     try {
-      await registerFromConfig(pi, initialConfig);
+      const modelsRegistry = await loadModelsRegistry();
+      const entry = getProviderCacheEntry(modelsRegistry, initialProvider.id);
+      if (entry?.models?.length) {
+        await registerProviderInstance(pi, initialProvider, entry.models);
+      }
     } catch (error) {
       console.error(
         "[openai-compatible] Failed to load saved provider:",
@@ -428,11 +904,18 @@ export default async function (pi: any) {
 
   pi.on("session_start", async (event: any, ctx: any) => {
     try {
-      const config = await loadConfig();
-      const savedModels = await loadDiscoveredModels();
+      const configState = await loadConfig();
+      const activeProvider = getProviderById(
+        configState,
+        configState.activeProviderId,
+      );
+      const modelsRegistry = await loadModelsRegistry();
+      const savedEntry = activeProvider
+        ? getProviderCacheEntry(modelsRegistry, activeProvider.id)
+        : null;
 
       if (
-        !config &&
+        !activeProvider &&
         ctx.hasUI &&
         (event?.reason === "startup" || event?.reason === "reload")
       ) {
@@ -443,27 +926,27 @@ export default async function (pi: any) {
         return;
       }
 
-      if (!config || !savedModels || savedModels.length === 0) return;
+      if (!activeProvider || !savedEntry?.models?.length) return;
 
       const currentModel = ctx.model;
-      if (currentModel && currentModel.provider === PROVIDER_ID) return;
+      if (currentModel && currentModel.provider === activeProvider.id) return;
 
-      const preferredModelId =
-        config.defaultModelId &&
-        savedModels.some(
-          (savedModel: any) => savedModel.id === config.defaultModelId,
-        )
-          ? config.defaultModelId
-          : savedModels[0]?.id;
+      const preferredModelId = getProviderSelectionModelId(
+        activeProvider,
+        savedEntry.models,
+      );
       if (!preferredModelId) return;
 
-      const model = ctx.modelRegistry?.find?.(PROVIDER_ID, preferredModelId);
+      const model = ctx.modelRegistry?.find?.(
+        activeProvider.id,
+        preferredModelId,
+      );
       if (!model) return;
 
       const selected = await pi.setModel(model);
       if (selected) {
         ctx.ui.notify(
-          `Selected default model: ${config.name} / ${model.id}`,
+          `Selected default model: ${activeProvider.name} / ${model.id}`,
           "info",
         );
       }
@@ -479,16 +962,27 @@ export default async function (pi: any) {
     description:
       "Login to an OpenAI-compatible provider and auto-fetch its models",
     handler: async (_args: string, ctx: any) => {
-      const existing = await loadConfig();
-      const config = await promptForConfig(ctx, existing || undefined);
-      if (!config) {
+      const configState = await loadConfig();
+      const preselected = getProviderById(
+        configState,
+        configState.activeProviderId,
+      );
+      const initialDefaults = preselected || undefined;
+      const draft = await promptForConfig(ctx, initialDefaults);
+      if (!draft) {
         ctx.ui.notify("Setup cancelled", "warning");
         return;
       }
 
+      const existing = getProviderByName(configState, draft.name);
+      const providerDraft = buildStoredConfig({ ...existing, ...draft });
+
       try {
-        const discovered = await fetchModels(config.baseUrl, config.apiKey);
-        config.baseUrl = discovered.resolvedBaseUrl;
+        const discovered = await fetchModels(
+          providerDraft.baseUrl,
+          providerDraft.apiKey,
+        );
+        providerDraft.baseUrl = discovered.resolvedBaseUrl;
 
         const modelOptions = discovered.models.map(
           (model: any, index: number) => `${index + 1}. ${model.name}`,
@@ -500,39 +994,43 @@ export default async function (pi: any) {
         const selectedModelIndex = selectedModelLabel
           ? modelOptions.indexOf(selectedModelLabel)
           : -1;
-        config.defaultModelId =
+        providerDraft.defaultModelId =
           selectedModelIndex >= 0
             ? discovered.models[selectedModelIndex]?.id
             : discovered.models[0]?.id;
 
-        await saveConfig(config);
-        await saveDiscoveredModels(discovered.models);
-        await syncAuthStore(config);
-        await syncSettings(config);
+        const nextConfig = putProviderProfile(configState, providerDraft);
+        nextConfig.activeProviderId = providerDraft.id;
+        await saveConfig(nextConfig);
 
-        pi.unregisterProvider(PROVIDER_ID);
-        pi.registerProvider(
-          PROVIDER_ID,
-          buildProviderConfig(config, discovered.models),
+        const modelsRegistry = await loadModelsRegistry();
+        await saveModelsRegistry(
+          mergeProviderModelsRegistry(
+            modelsRegistry,
+            providerDraft.id,
+            providerDraft,
+            discovered.models,
+          ),
         );
 
-        if (config.defaultModelId) {
-          const model = ctx.modelRegistry?.find?.(
-            PROVIDER_ID,
-            config.defaultModelId,
-          );
-          if (model) {
-            await pi.setModel(model);
-          }
-        }
+        await activateProvider(
+          pi,
+          ctx,
+          nextConfig,
+          providerDraft,
+          discovered.models,
+          {
+            notify: false,
+          },
+        );
 
         ctx.ui.notify(
-          `Registered ${config.name} with ${discovered.models.length} model(s)`,
+          `Registered ${providerDraft.name} with ${discovered.models.length} model(s)`,
           "info",
         );
-        if (config.defaultModelId) {
+        if (providerDraft.defaultModelId) {
           ctx.ui.notify(
-            `Default model set to ${config.defaultModelId}`,
+            `Default model set to ${providerDraft.defaultModelId}`,
             "info",
           );
         }
@@ -550,10 +1048,14 @@ export default async function (pi: any) {
   });
 
   pi.registerCommand("openai-compatible-refresh", {
-    description: "Refresh models from the saved OpenAI-compatible provider",
+    description: "Refresh models from the active OpenAI-compatible provider",
     handler: async (_args: string, ctx: any) => {
-      const config = await loadConfig();
-      if (!config) {
+      const configState = await loadConfig();
+      const activeProvider = getProviderById(
+        configState,
+        configState.activeProviderId,
+      );
+      if (!activeProvider) {
         ctx.ui.notify(
           "No saved provider config. Run /openai-compatible-login first.",
           "warning",
@@ -562,27 +1064,51 @@ export default async function (pi: any) {
       }
 
       try {
-        const discovered = await fetchModels(config.baseUrl, config.apiKey);
-        config.baseUrl = discovered.resolvedBaseUrl;
+        const discovered = await fetchModels(
+          activeProvider.baseUrl,
+          activeProvider.apiKey,
+        );
+        const refreshedProvider = buildStoredConfig({
+          ...activeProvider,
+          baseUrl: discovered.resolvedBaseUrl,
+        });
         if (
-          !config.defaultModelId ||
+          !refreshedProvider.defaultModelId ||
           !discovered.models.some(
-            (model: any) => model.id === config.defaultModelId,
+            (model: any) => model.id === refreshedProvider.defaultModelId,
           )
         ) {
-          config.defaultModelId = discovered.models[0]?.id;
+          refreshedProvider.defaultModelId = discovered.models[0]?.id;
         }
-        pi.unregisterProvider(PROVIDER_ID);
-        pi.registerProvider(
-          PROVIDER_ID,
-          buildProviderConfig(config, discovered.models),
+
+        const nextConfig = putProviderProfile(configState, refreshedProvider);
+        nextConfig.activeProviderId = refreshedProvider.id;
+        await saveConfig(nextConfig);
+
+        const modelsRegistry = await loadModelsRegistry();
+        await saveModelsRegistry(
+          mergeProviderModelsRegistry(
+            modelsRegistry,
+            refreshedProvider.id,
+            refreshedProvider,
+            discovered.models,
+          ),
         );
-        await saveConfig(config);
-        await saveDiscoveredModels(discovered.models);
-        await syncAuthStore(config);
-        await syncSettings(config);
+
+        pi.unregisterProvider(refreshedProvider.id);
+        await activateProvider(
+          pi,
+          ctx,
+          nextConfig,
+          refreshedProvider,
+          discovered.models,
+          {
+            notify: false,
+          },
+        );
+
         ctx.ui.notify(
-          `Refreshed ${discovered.models.length} model(s) for ${config.name}`,
+          `Refreshed ${discovered.models.length} model(s) for ${refreshedProvider.name}`,
           "info",
         );
       } catch (error: any) {
@@ -594,14 +1120,142 @@ export default async function (pi: any) {
     },
   });
 
-  pi.registerCommand("openai-compatible-clear", {
-    description: "Remove the saved OpenAI-compatible provider config",
+  pi.registerCommand("openai-compatible-list", {
+    description: "List saved OpenAI-compatible providers",
     handler: async (_args: string, ctx: any) => {
-      await clearConfig();
-      await clearDiscoveredModels();
-      await clearAuthStore();
-      pi.unregisterProvider(PROVIDER_ID);
-      ctx.ui.notify("OpenAI-compatible provider removed", "info");
+      const configState = await loadConfig();
+      if (configState.providers.length === 0) {
+        ctx.ui.notify("No saved OpenAI-compatible providers.", "info");
+        return;
+      }
+
+      for (const provider of configState.providers) {
+        ctx.ui.notify(
+          formatProviderSummary(
+            provider,
+            provider.id === configState.activeProviderId,
+          ),
+          "info",
+        );
+      }
+    },
+  });
+
+  pi.registerCommand("openai-compatible-switch", {
+    description: "Switch to another saved OpenAI-compatible provider",
+    handler: async (_args: string, ctx: any) => {
+      const configState = await loadConfig();
+      if (configState.providers.length === 0) {
+        ctx.ui.notify(
+          "No saved providers. Run /openai-compatible-login first.",
+          "warning",
+        );
+        return;
+      }
+
+      const options = configState.providers.map((provider) => provider.name);
+      const selectedName = await ctx.ui.select("Select provider", options);
+      if (!selectedName) {
+        ctx.ui.notify("Switch cancelled", "warning");
+        return;
+      }
+
+      const selectedProvider = getProviderByName(configState, selectedName);
+      if (!selectedProvider) {
+        ctx.ui.notify(`Provider not found: ${selectedName}`, "error");
+        return;
+      }
+
+      const modelsRegistry = await loadModelsRegistry();
+      const savedEntry = getProviderCacheEntry(
+        modelsRegistry,
+        selectedProvider.id,
+      );
+      if (!savedEntry?.models?.length) {
+        ctx.ui.notify(
+          `No cached models for ${selectedProvider.name}. Run /openai-compatible-refresh or login again.`,
+          "warning",
+        );
+        return;
+      }
+
+      await activateProvider(
+        pi,
+        ctx,
+        configState,
+        selectedProvider,
+        savedEntry.models,
+      );
+    },
+  });
+
+  pi.registerCommand("openai-compatible-clear", {
+    description: "Remove one or all saved OpenAI-compatible provider configs",
+    handler: async (_args: string, ctx: any) => {
+      const configState = await loadConfig();
+      if (configState.providers.length === 0) {
+        ctx.ui.notify("No saved providers to remove.", "info");
+        return;
+      }
+
+      const options =
+        configState.providers.length === 1
+          ? [configState.providers[0].name]
+          : [
+              ...configState.providers.map((provider) => provider.name),
+              "all providers",
+            ];
+      const selected = await ctx.ui.select("Remove provider", options);
+      if (!selected) {
+        ctx.ui.notify("Clear cancelled", "warning");
+        return;
+      }
+
+      if (selected === "all providers") {
+        for (const provider of configState.providers) {
+          pi.unregisterProvider(provider.id);
+          await clearAuthStore(provider.id);
+          await clearAgentModelsRegistry(provider.id);
+        }
+        const activeProvider = getProviderById(
+          configState,
+          configState.activeProviderId,
+        );
+        await restoreSettings(activeProvider);
+        await saveModelsRegistry({});
+        await clearConfig();
+        ctx.ui.notify("All OpenAI-compatible providers removed", "info");
+        return;
+      }
+
+      const provider = getProviderByName(configState, selected);
+      if (!provider) {
+        ctx.ui.notify(`Provider not found: ${selected}`, "error");
+        return;
+      }
+
+      const wasActive = configState.activeProviderId === provider.id;
+      if (wasActive) {
+        pi.unregisterProvider(provider.id);
+        await restoreSettings(provider);
+      }
+
+      await clearAuthStore(provider.id);
+      await clearAgentModelsRegistry(provider.id);
+
+      const modelsRegistry = await loadModelsRegistry();
+      await saveModelsRegistry(
+        removeProviderModelsRegistryEntry(modelsRegistry, provider.id),
+      );
+
+      const nextConfig = removeProviderProfile(configState, provider.id);
+      if (nextConfig.providers.length === 0) {
+        await clearConfig();
+      } else {
+        await saveConfig(nextConfig);
+      }
+
+      ctx.ui.notify(`Removed ${provider.name}`, "info");
     },
   });
 }
