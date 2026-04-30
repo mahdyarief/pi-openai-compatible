@@ -8,9 +8,10 @@
   "scripts": {
     "clean": "echo 'nothing to clean'",
     "build": "echo 'nothing to build'",
-    "check": "node --test index.test.ts",
+    "test": "node --test index.test.ts",
+    "check": "npm run test && npm run typecheck && npm run lint",
     "typecheck": "tsc --noEmit",
-    "format": "biome check .",
+    "format": "biome format --write .",
     "lint": "biome check .",
     "knip": "knip"
   },

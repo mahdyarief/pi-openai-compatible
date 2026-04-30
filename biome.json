@@ -1,7 +1,12 @@
 {
   "$schema": "https://biomejs.dev/schemas/1.9.4/schema.json",
   "files": {
-    "ignore": ["provider-config.json", "provider-models.json", "node_modules"]
+    "ignore": [
+      ".pi",
+      "provider-config.json",
+      "provider-models.json",
+      "node_modules"
+    ]
   },
   "formatter": {
     "enabled": true,
