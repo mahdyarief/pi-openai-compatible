@@ -19,6 +19,7 @@ import {
   clearAgentModelsRegistry,
   clearAuthStore,
   clearConfig,
+  loadAgentModelsRegistry,
   loadConfig,
   loadModelsRegistry,
   restoreSettings,
@@ -31,27 +32,14 @@ import {
 import type {
   ActivationOptions,
   CommandContext,
+  ExtensionDependencies,
   ModelRecord,
   PiInstance,
   ProviderProfile,
+  RecoveredProvider,
   RegisteredProviderConfig,
   StoredConfig,
 } from "./types.ts";
-
-export type ExtensionDependencies = {
-  clearAgentModelsRegistry: typeof clearAgentModelsRegistry;
-  clearAuthStore: typeof clearAuthStore;
-  clearConfig: typeof clearConfig;
-  fetchModels: typeof fetchModels;
-  loadConfig: typeof loadConfig;
-  loadModelsRegistry: typeof loadModelsRegistry;
-  restoreSettings: typeof restoreSettings;
-  saveConfig: typeof saveConfig;
-  saveModelsRegistry: typeof saveModelsRegistry;
-  syncAgentModelsRegistry: typeof syncAgentModelsRegistry;
-  syncAuthStore: typeof syncAuthStore;
-  syncSettings: typeof syncSettings;
-};
 
 const defaultDependencies: ExtensionDependencies = {
   clearAgentModelsRegistry,
@@ -60,6 +48,7 @@ const defaultDependencies: ExtensionDependencies = {
   fetchModels,
   loadConfig,
   loadModelsRegistry,
+  loadAgentModelsRegistry,
   restoreSettings,
   saveConfig,
   saveModelsRegistry,
@@ -203,6 +192,49 @@ function formatProviderSummary(
   return `${marker} ${provider.name} — ${provider.baseUrl} — ${model}`;
 }
 
+function getCachedModels(entry: unknown): ModelRecord[] {
+  if (!isRecord(entry) || !Array.isArray(entry.models)) return [];
+  return entry.models as ModelRecord[];
+}
+
+function buildRecoveredProvidersFromAgentRegistry(
+  registry: unknown,
+): RecoveredProvider[] {
+  const providers =
+    isRecord(registry) && isRecord(registry.providers)
+      ? registry.providers
+      : {};
+
+  return Object.entries(providers)
+    .filter(([providerId, entry]) => {
+      return (
+        providerId.startsWith("openai-compatible:") &&
+        isRecord(entry) &&
+        typeof entry.name === "string" &&
+        typeof entry.baseUrl === "string" &&
+        typeof entry.apiKey === "string"
+      );
+    })
+    .map(([providerId, entry]) => {
+      const source = entry as Record<string, unknown>;
+      const config = buildStoredConfig({
+        id: providerId,
+        name: String(source.name),
+        baseUrl: String(source.baseUrl),
+        apiKey: String(source.apiKey),
+        defaultModelId:
+          typeof source.defaultModelId === "string"
+            ? source.defaultModelId
+            : undefined,
+      });
+      return {
+        config,
+        models: getCachedModels(source),
+      } satisfies RecoveredProvider;
+    })
+    .filter((provider) => provider.models.length > 0);
+}
+
 export function createExtension(
   overrides: Partial<ExtensionDependencies> = {},
 ): (pi: PiInstance) => Promise<void> {
@@ -213,32 +245,37 @@ export function createExtension(
 
   return async function registerExtension(pi: PiInstance) {
     const initialConfig = await dependencies.loadConfig();
-    const initialProvider = getProviderById(
-      initialConfig,
-      initialConfig.activeProviderId,
-    );
-    if (initialProvider) {
-      try {
-        const modelsRegistry = await dependencies.loadModelsRegistry();
-        const entry = getProviderCacheEntry(modelsRegistry, initialProvider.id);
-        if (
-          entry?.models &&
-          Array.isArray(entry.models) &&
-          entry.models.length > 0
-        ) {
+
+    try {
+      const modelsRegistry = await dependencies.loadModelsRegistry();
+
+      for (const provider of initialConfig.providers) {
+        const models = getCachedModels(
+          getProviderCacheEntry(modelsRegistry, provider.id),
+        );
+        if (models.length === 0) continue;
+        await registerProviderInstance(pi, provider, models, dependencies);
+      }
+
+      if (initialConfig.providers.length === 0) {
+        const recoveredProviders = buildRecoveredProvidersFromAgentRegistry(
+          await dependencies.loadAgentModelsRegistry(),
+        );
+
+        for (const recoveredProvider of recoveredProviders) {
           await registerProviderInstance(
             pi,
-            initialProvider,
-            entry.models as ModelRecord[],
+            recoveredProvider.config,
+            recoveredProvider.models,
             dependencies,
           );
         }
-      } catch (error) {
-        console.error(
-          "[openai-compatible] Failed to load saved provider:",
-          error,
-        );
       }
+    } catch (error) {
+      console.error(
+        "[openai-compatible] Failed to load saved providers:",
+        error,
+      );
     }
 
     pi.on("session_start", async (event, ctx) => {

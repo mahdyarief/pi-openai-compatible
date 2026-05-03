@@ -10,10 +10,10 @@ import {
   MODELS_PATH,
   SETTINGS_PATH,
   applyCurrentSelection,
+  buildMergedWritableModelsRegistry,
   buildPreviousSelection,
   buildRegisteredProviderConfig,
   buildRestoredSettings,
-  buildMergedWritableModelsRegistry,
   buildStoredConfig,
   buildStoredConfigFile,
   buildStoredConfigFromLegacy,
@@ -32,18 +32,17 @@ import {
   removeProviderProfile,
   updateProviderLastModel,
 } from "./index.ts";
-import registerExtension, {
-  createExtension,
-  type ExtensionDependencies,
-} from "./src/extension.ts";
+import registerExtension, { createExtension } from "./src/extension.ts";
 import type {
   AgentModelsRegistry,
   CommandContext,
+  ExtensionDependencies,
   JsonObject,
   ModelRecord,
   PiCommandDefinition,
   PiInstance,
   PiModel,
+  ProviderProfile,
   StoredConfig,
 } from "./src/types.ts";
 
@@ -545,6 +544,7 @@ type TestHarness = {
   state: {
     config: StoredConfig;
     modelsRegistry: AgentModelsRegistry;
+    agentModelsRegistry: AgentModelsRegistry;
     authClears: string[];
     agentModelClears: string[];
     restoredProviders: Array<string | undefined>;
@@ -570,6 +570,7 @@ type TestHarness = {
 function createHarness(options?: {
   config?: StoredConfig;
   modelsRegistry?: AgentModelsRegistry;
+  agentModelsRegistry?: AgentModelsRegistry;
   fetchModelsResult?: { models: ModelRecord[]; resolvedBaseUrl: string };
   fetchModelsError?: Error;
   inputs?: string[];
@@ -580,6 +581,7 @@ function createHarness(options?: {
   const state = {
     config: options?.config || ensureStoredConfig(null),
     modelsRegistry: options?.modelsRegistry || { providers: {} },
+    agentModelsRegistry: options?.agentModelsRegistry || { providers: {} },
     authClears: [] as string[],
     agentModelClears: [] as string[],
     restoredProviders: [] as Array<string | undefined>,
@@ -611,29 +613,31 @@ function createHarness(options?: {
       state.config = ensureStoredConfig(null);
     },
     loadModelsRegistry: async () => structuredClone(state.modelsRegistry),
+    loadAgentModelsRegistry: async () =>
+      structuredClone(state.agentModelsRegistry),
     saveModelsRegistry: async (registry) => {
       state.modelsRegistry = structuredClone(registry as AgentModelsRegistry);
       state.savedModelRegistries.push(structuredClone(registry));
     },
-    syncAuthStore: async (provider) => {
+    syncAuthStore: async (provider: ProviderProfile) => {
       state.syncAuthProviders.push(provider.id);
     },
-    syncSettings: async (provider) => {
+    syncSettings: async (provider: ProviderProfile) => {
       state.syncSettingsProviders.push(provider.id);
     },
-    syncAgentModelsRegistry: async (providerId) => {
+    syncAgentModelsRegistry: async (providerId: string) => {
       state.syncAgentProviders.push(providerId);
     },
-    clearAuthStore: async (providerId) => {
+    clearAuthStore: async (providerId: string) => {
       state.authClears.push(providerId);
     },
-    clearAgentModelsRegistry: async (providerId) => {
+    clearAgentModelsRegistry: async (providerId: string) => {
       state.agentModelClears.push(providerId);
     },
-    restoreSettings: async (provider) => {
+    restoreSettings: async (provider?: ProviderProfile | null) => {
       state.restoredProviders.push(provider?.id);
     },
-    fetchModels: async (baseUrl, apiKey) => {
+    fetchModels: async (baseUrl: string, apiKey: string) => {
       state.fetched.push({ baseUrl, apiKey });
       if (options?.fetchModelsError) {
         throw options.fetchModelsError;
@@ -702,6 +706,64 @@ async function registerTestExtension(harness: TestHarness) {
 
 test("default export is a callable extension registrar", () => {
   assert.equal(typeof registerExtension, "function");
+});
+
+test("startup registers all saved extension providers from config and cache", async () => {
+  const providerA = buildStoredConfig({
+    name: "Alpha",
+    baseUrl: "https://alpha.example/v1",
+    apiKey: "alpha-key",
+    defaultModelId: "alpha-model",
+  });
+  const providerB = buildStoredConfig({
+    name: "Beta",
+    baseUrl: "https://beta.example/v1",
+    apiKey: "beta-key",
+    defaultModelId: "beta-model",
+  });
+  const harness = createHarness({
+    config: {
+      version: 2,
+      activeProviderId: providerA.id,
+      providers: [providerA, providerB],
+    },
+    modelsRegistry: {
+      providers: {
+        [providerA.id]: { models: [{ id: "alpha-model" }] },
+        [providerB.id]: { models: [{ id: "beta-model" }] },
+      },
+    },
+  });
+
+  await registerTestExtension(harness);
+
+  assert.deepEqual(harness.state.registeredProviders, [
+    providerA.id,
+    providerB.id,
+  ]);
+});
+
+test("startup recovers provider registration from agent registry when config is missing", async () => {
+  const providerId = `${EXTENSION_PROVIDER_PREFIX}:recovered`;
+  const harness = createHarness({
+    agentModelsRegistry: {
+      providers: {
+        [providerId]: {
+          provider: providerId,
+          name: "Recovered",
+          baseUrl: "https://recovered.example/v1",
+          apiKey: "recovered-key",
+          defaultModelId: "recovered-model",
+          models: [{ id: "recovered-model" }],
+        },
+      },
+    },
+  });
+
+  await registerTestExtension(harness);
+
+  assert.deepEqual(harness.state.registeredProviders, [providerId]);
+  assert.deepEqual(harness.state.syncAgentProviders, [providerId]);
 });
 
 test("login command registers provider, saves config, and selects default model", async () => {

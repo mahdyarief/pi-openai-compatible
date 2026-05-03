@@ -66,7 +66,9 @@ export function buildMergedWritableModelsRegistry(
   registry: unknown,
 ): Record<string, unknown> {
   const preserved = isRecord(existing) ? existing : {};
-  const existingProviders = isRecord(preserved.providers) ? preserved.providers : {};
+  const existingProviders = isRecord(preserved.providers)
+    ? preserved.providers
+    : {};
   const normalized = ensureAgentModelsRegistry(registry);
 
   return {
@@ -137,10 +139,17 @@ export async function loadModelsRegistry(): Promise<AgentModelsRegistry> {
   return ensureAgentModelsRegistry(await loadJsonFile(MODELS_PATH));
 }
 
+export async function loadAgentModelsRegistry(): Promise<AgentModelsRegistry> {
+  return ensureAgentModelsRegistry(await loadJsonFile(AGENT_MODELS_PATH));
+}
+
 export async function saveModelsRegistry(registry: unknown): Promise<void> {
   await saveJsonFile(
     MODELS_PATH,
-    buildMergedWritableModelsRegistry(await loadJsonFile(MODELS_PATH), registry),
+    buildMergedWritableModelsRegistry(
+      await loadJsonFile(MODELS_PATH),
+      registry,
+    ),
   );
 }
 

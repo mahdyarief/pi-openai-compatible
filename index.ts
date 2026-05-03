@@ -28,6 +28,7 @@ export {
 export {
   buildMergedWritableModelsRegistry,
   buildStoredConfigFile,
+  loadAgentModelsRegistry,
 } from "./src/storage.ts";
 
 export {
@@ -51,6 +52,7 @@ export type {
   CommandContext,
   Cost,
   FetchModelsResult,
+  ExtensionDependencies,
   JsonObject,
   ModelRecord,
   PiCommandDefinition,
@@ -61,6 +63,7 @@ export type {
   PreviousSelection,
   ProviderCacheEntry,
   ProviderProfile,
+  RecoveredProvider,
   RegisteredProviderConfig,
   SettingsStore,
   StoredConfig,

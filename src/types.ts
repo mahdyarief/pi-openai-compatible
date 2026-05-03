@@ -133,6 +133,31 @@ export type PiCommandDefinition = {
   handler: (args: string, ctx: CommandContext) => Promise<void>;
 };
 
+export type ExtensionDependencies = {
+  clearAgentModelsRegistry: (providerId: string) => Promise<void>;
+  clearAuthStore: (providerId: string) => Promise<void>;
+  clearConfig: () => Promise<void>;
+  fetchModels: (baseUrl: string, apiKey: string) => Promise<FetchModelsResult>;
+  loadConfig: () => Promise<StoredConfig>;
+  loadModelsRegistry: () => Promise<AgentModelsRegistry>;
+  loadAgentModelsRegistry: () => Promise<AgentModelsRegistry>;
+  restoreSettings: (provider?: ProviderProfile | null) => Promise<void>;
+  saveConfig: (config: StoredConfig) => Promise<void>;
+  saveModelsRegistry: (registry: unknown) => Promise<void>;
+  syncAgentModelsRegistry: (
+    providerId: string,
+    config: ProviderProfile,
+    models: ModelRecord[],
+  ) => Promise<void>;
+  syncAuthStore: (config: ProviderProfile) => Promise<void>;
+  syncSettings: (config: ProviderProfile) => Promise<void>;
+};
+
+export type RecoveredProvider = {
+  config: ProviderProfile;
+  models: ModelRecord[];
+};
+
 export type RegisteredProviderConfig = {
   baseUrl: string;
   apiKey: string;
