@@ -1,7 +1,12 @@
 export { default } from "./src/extension.ts";
 
 export {
+  AGENT_MODELS_PATH,
+  AUTH_PATH,
+  CONFIG_PATH,
   EXTENSION_PROVIDER_PREFIX,
+  MODELS_PATH,
+  SETTINGS_PATH,
   canonicalizeProviderName,
   getCandidateBaseUrls,
   getProviderId,
@@ -19,6 +24,11 @@ export {
   removeProviderProfile,
   updateProviderLastModel,
 } from "./src/config.ts";
+
+export {
+  buildMergedWritableModelsRegistry,
+  buildStoredConfigFile,
+} from "./src/storage.ts";
 
 export {
   applyCurrentSelection,

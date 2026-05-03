@@ -1,13 +1,21 @@
 import assert from "node:assert/strict";
+import { dirname, join } from "node:path";
 import test from "node:test";
 
 import {
+  AGENT_MODELS_PATH,
+  AUTH_PATH,
+  CONFIG_PATH,
   EXTENSION_PROVIDER_PREFIX,
+  MODELS_PATH,
+  SETTINGS_PATH,
   applyCurrentSelection,
   buildPreviousSelection,
   buildRegisteredProviderConfig,
   buildRestoredSettings,
+  buildMergedWritableModelsRegistry,
   buildStoredConfig,
+  buildStoredConfigFile,
   buildStoredConfigFromLegacy,
   buildWritableProviderCacheEntry,
   canonicalizeProviderName,
@@ -31,6 +39,7 @@ import registerExtension, {
 import type {
   AgentModelsRegistry,
   CommandContext,
+  JsonObject,
   ModelRecord,
   PiCommandDefinition,
   PiInstance,
@@ -63,6 +72,17 @@ test("getCandidateBaseUrls handles base paths and endpoint-like inputs", () => {
 
 test("canonicalizeProviderName trims and lowercases provider names", () => {
   assert.equal(canonicalizeProviderName("  DiYProxy  "), "diyproxy");
+});
+
+test("storage paths target extension state in extension dir and Pi state in agent dir", () => {
+  const extensionDir = dirname(CONFIG_PATH);
+  const agentDir = join(extensionDir, "..", "..");
+
+  assert.equal(CONFIG_PATH, join(extensionDir, "provider-config.json"));
+  assert.equal(MODELS_PATH, join(extensionDir, "provider-models.json"));
+  assert.equal(AUTH_PATH, join(agentDir, "auth.json"));
+  assert.equal(AGENT_MODELS_PATH, join(agentDir, "models.json"));
+  assert.equal(SETTINGS_PATH, join(agentDir, "settings.json"));
 });
 
 test("getProviderId generates stable provider ids", () => {
@@ -253,6 +273,82 @@ test("buildWritableProviderCacheEntry strips secrets from cached model metadata"
 
   assert.equal(entry.provider, `${EXTENSION_PROVIDER_PREFIX}:diyproxy`);
   assert.equal("apiKey" in entry, false);
+});
+
+test("buildStoredConfigFile preserves unknown top-level config fields", () => {
+  const merged = buildStoredConfigFile(
+    {
+      note: "keep-me",
+      version: 1,
+      providers: [{ name: "legacy", baseUrl: "https://old", apiKey: "x" }],
+    },
+    {
+      version: 2,
+      activeProviderId: `${EXTENSION_PROVIDER_PREFIX}:alpha`,
+      providers: [
+        buildStoredConfig({
+          name: "Alpha",
+          baseUrl: "https://alpha.example/v1",
+          apiKey: "secret",
+        }),
+      ],
+    },
+  ) as JsonObject & {
+    providers: unknown[];
+    activeProviderId?: string;
+    version: number;
+    note?: string;
+  };
+
+  assert.equal(merged.note, "keep-me");
+  assert.equal(merged.version, 2);
+  assert.equal(merged.activeProviderId, `${EXTENSION_PROVIDER_PREFIX}:alpha`);
+  assert.equal(Array.isArray(merged.providers), true);
+  assert.equal(merged.providers.length, 1);
+});
+
+test("buildMergedWritableModelsRegistry preserves unknown fields while updating targeted provider", () => {
+  const providerId = `${EXTENSION_PROVIDER_PREFIX}:alpha`;
+  const merged = buildMergedWritableModelsRegistry(
+    {
+      note: "keep-me",
+      providers: {
+        [providerId]: {
+          custom: "preserve-provider-field",
+          stale: true,
+          apiKey: "old-secret",
+          models: [{ id: "stale-model" }],
+        },
+        other: {
+          custom: "keep-other-provider",
+          models: [{ id: "shared-model" }],
+        },
+      },
+    },
+    {
+      providers: {
+        [providerId]: {
+          name: "Alpha",
+          baseUrl: "https://alpha.example/v1",
+          apiKey: "new-secret",
+          defaultModelId: "fresh-model",
+          models: [{ id: "fresh-model", name: "Alpha / fresh-model" }],
+        },
+      },
+    },
+  ) as JsonObject & {
+    note?: string;
+    providers: Record<string, JsonObject & { models?: unknown[] }>;
+  };
+
+  assert.equal(merged.note, "keep-me");
+  assert.equal(merged.providers[providerId].custom, "preserve-provider-field");
+  assert.equal("apiKey" in merged.providers[providerId], false);
+  assert.deepEqual(merged.providers[providerId].models, [
+    { id: "fresh-model", name: "Alpha / fresh-model" },
+  ]);
+  assert.equal(merged.providers.other.custom, "keep-other-provider");
+  assert.deepEqual(merged.providers.other.models, [{ id: "shared-model" }]);
 });
 
 test("getProviderCacheEntry returns the provider-specific models entry", () => {

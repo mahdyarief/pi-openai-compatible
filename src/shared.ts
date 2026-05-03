@@ -3,8 +3,9 @@ import { fileURLToPath } from "node:url";
 
 export const EXTENSION_PROVIDER_PREFIX = "openai-compatible";
 export const CONFIG_VERSION = 2;
-const EXTENSION_DIR = dirname(fileURLToPath(import.meta.url));
-const AGENT_DIR = join(EXTENSION_DIR, "..", "..");
+const SRC_DIR = dirname(fileURLToPath(import.meta.url));
+const EXTENSION_DIR = join(SRC_DIR, "..");
+const AGENT_DIR = join(SRC_DIR, "..", "..", "..");
 export const CONFIG_PATH = join(EXTENSION_DIR, "provider-config.json");
 export const AUTH_PATH = join(AGENT_DIR, "auth.json");
 export const AGENT_MODELS_PATH = join(AGENT_DIR, "models.json");

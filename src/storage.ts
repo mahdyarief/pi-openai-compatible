@@ -27,6 +27,7 @@ import type {
   AuthStore,
   JsonObject,
   ModelRecord,
+  ProviderCacheEntry,
   ProviderProfile,
   SettingsStore,
   StoredConfig,
@@ -46,13 +47,72 @@ async function saveJsonFile(path: string, value: unknown): Promise<void> {
   await writeFile(path, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
 
+export function buildStoredConfigFile(
+  existing: unknown,
+  config: StoredConfig,
+): Record<string, unknown> {
+  const preserved = isRecord(existing) ? existing : {};
+  const normalized = ensureStoredConfig(config);
+  return {
+    ...preserved,
+    version: normalized.version,
+    activeProviderId: normalized.activeProviderId,
+    providers: normalized.providers,
+  };
+}
+
+export function buildMergedWritableModelsRegistry(
+  existing: unknown,
+  registry: unknown,
+): Record<string, unknown> {
+  const preserved = isRecord(existing) ? existing : {};
+  const existingProviders = isRecord(preserved.providers) ? preserved.providers : {};
+  const normalized = ensureAgentModelsRegistry(registry);
+
+  return {
+    ...preserved,
+    providers: {
+      ...existingProviders,
+      ...Object.fromEntries(
+        Object.entries(normalized.providers).map(([providerId, entry]) => {
+          const source = isRecord(entry) ? entry : {};
+          const currentEntry = isRecord(existingProviders[providerId])
+            ? (existingProviders[providerId] as Record<string, unknown>)
+            : {};
+          const { apiKey: _ignoredApiKey, ...preservedEntry } = currentEntry;
+          return [
+            providerId,
+            {
+              ...preservedEntry,
+              ...buildWritableProviderCacheEntry(
+                providerId,
+                {
+                  name: String(source.name || "OpenAI Compatible"),
+                  baseUrl: String(source.baseUrl || ""),
+                  defaultModelId: toOptionalString(source.defaultModelId),
+                },
+                Array.isArray(source.models)
+                  ? (source.models as ModelRecord[])
+                  : [],
+              ),
+            } satisfies ProviderCacheEntry,
+          ];
+        }),
+      ),
+    },
+  };
+}
+
 export async function loadConfig(): Promise<StoredConfig> {
   const raw = await loadJsonFile(CONFIG_PATH);
   return ensureStoredConfig(raw);
 }
 
 export async function saveConfig(config: StoredConfig): Promise<void> {
-  await saveJsonFile(CONFIG_PATH, ensureStoredConfig(config));
+  await saveJsonFile(
+    CONFIG_PATH,
+    buildStoredConfigFile(await loadJsonFile(CONFIG_PATH), config),
+  );
 }
 
 export async function clearConfig(): Promise<void> {
@@ -78,29 +138,10 @@ export async function loadModelsRegistry(): Promise<AgentModelsRegistry> {
 }
 
 export async function saveModelsRegistry(registry: unknown): Promise<void> {
-  const normalized = ensureAgentModelsRegistry(registry);
-  const sanitized = {
-    providers: Object.fromEntries(
-      Object.entries(normalized.providers).map(([providerId, entry]) => {
-        const source = isRecord(entry) ? entry : {};
-        return [
-          providerId,
-          buildWritableProviderCacheEntry(
-            providerId,
-            {
-              name: String(source.name || "OpenAI Compatible"),
-              baseUrl: String(source.baseUrl || ""),
-              defaultModelId: toOptionalString(source.defaultModelId),
-            },
-            Array.isArray(source.models)
-              ? (source.models as ModelRecord[])
-              : [],
-          ),
-        ];
-      }),
-    ),
-  };
-  await saveJsonFile(MODELS_PATH, sanitized);
+  await saveJsonFile(
+    MODELS_PATH,
+    buildMergedWritableModelsRegistry(await loadJsonFile(MODELS_PATH), registry),
+  );
 }
 
 export async function syncAgentModelsRegistry(
