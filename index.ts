@@ -27,6 +27,8 @@ export {
 
 export {
   buildMergedWritableModelsRegistry,
+  buildPrunedAgentModelsRegistry,
+  buildPrunedAuthStore,
   buildStoredConfigFile,
   loadAgentModelsRegistry,
 } from "./src/storage.ts";

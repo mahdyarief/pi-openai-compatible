@@ -248,13 +248,19 @@ export function createExtension(
 
     try {
       const modelsRegistry = await dependencies.loadModelsRegistry();
+      const activeProvider = getProviderById(
+        initialConfig,
+        initialConfig.activeProviderId,
+      );
 
-      for (const provider of initialConfig.providers) {
+      // Only register the active provider's models at startup
+      if (activeProvider) {
         const models = getCachedModels(
-          getProviderCacheEntry(modelsRegistry, provider.id),
+          getProviderCacheEntry(modelsRegistry, activeProvider.id),
         );
-        if (models.length === 0) continue;
-        await registerProviderInstance(pi, provider, models, dependencies);
+        if (models.length > 0) {
+          await registerProviderInstance(pi, activeProvider, models, dependencies);
+        }
       }
 
       if (initialConfig.providers.length === 0) {
@@ -262,13 +268,23 @@ export function createExtension(
           await dependencies.loadAgentModelsRegistry(),
         );
 
-        for (const recoveredProvider of recoveredProviders) {
+        // Only register the first recovered provider
+        if (recoveredProviders.length > 0) {
+          const recoveredProvider = recoveredProviders[0];
           await registerProviderInstance(
             pi,
             recoveredProvider.config,
             recoveredProvider.models,
             dependencies,
           );
+
+          // Set this as the active provider
+          const nextConfig = {
+            ...initialConfig,
+            activeProviderId: recoveredProvider.config.id,
+            providers: [recoveredProvider.config],
+          };
+          await dependencies.saveConfig(nextConfig);
         }
       }
     } catch (error) {
@@ -454,6 +470,23 @@ export function createExtension(
         }
 
         try {
+          const cachedModels = getCachedModels(
+            getProviderCacheEntry(
+              await dependencies.loadModelsRegistry(),
+              activeProvider.id,
+            ),
+          );
+
+          // Hard-sync active provider into Pi global auth/models/settings first.
+          // This repairs stale inactive-provider entries even if remote fetch fails.
+          await dependencies.syncAuthStore(activeProvider);
+          await dependencies.syncAgentModelsRegistry(
+            activeProvider.id,
+            activeProvider,
+            cachedModels,
+          );
+          await dependencies.syncSettings(activeProvider);
+
           const discovered = await dependencies.fetchModels(
             activeProvider.baseUrl,
             activeProvider.apiKey,

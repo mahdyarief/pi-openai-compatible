@@ -11,6 +11,8 @@ import {
   SETTINGS_PATH,
   applyCurrentSelection,
   buildMergedWritableModelsRegistry,
+  buildPrunedAuthStore,
+  buildPrunedAgentModelsRegistry,
   buildPreviousSelection,
   buildRegisteredProviderConfig,
   buildRestoredSettings,
@@ -348,6 +350,65 @@ test("buildMergedWritableModelsRegistry preserves unknown fields while updating 
   ]);
   assert.equal(merged.providers.other.custom, "keep-other-provider");
   assert.deepEqual(merged.providers.other.models, [{ id: "shared-model" }]);
+});
+
+test("buildPrunedAgentModelsRegistry keeps only active extension provider and non-extension providers", () => {
+  const activeProviderId = `${EXTENSION_PROVIDER_PREFIX}:alpha`;
+  const pruned = buildPrunedAgentModelsRegistry(
+    {
+      providers: {
+        [activeProviderId]: { models: [{ id: "alpha-model" }] },
+        [`${EXTENSION_PROVIDER_PREFIX}:beta`]: {
+          models: [{ id: "beta-model" }],
+        },
+        anthropic: { models: [{ id: "claude" }] },
+      },
+    },
+    activeProviderId,
+  );
+
+  assert.deepEqual(pruned, {
+    providers: {
+      [activeProviderId]: { models: [{ id: "alpha-model" }] },
+      anthropic: { models: [{ id: "claude" }] },
+    },
+  });
+});
+
+test("buildPrunedAuthStore keeps only active extension auth and preserves non-extension defaults", () => {
+  const activeProviderId = `${EXTENSION_PROVIDER_PREFIX}:alpha`;
+  const pruned = buildPrunedAuthStore(
+    {
+      providers: {
+        [activeProviderId]: { authenticated: true },
+        [`${EXTENSION_PROVIDER_PREFIX}:beta`]: { authenticated: true },
+        anthropic: { authenticated: true },
+      },
+      [activeProviderId]: { authenticated: true },
+      [`${EXTENSION_PROVIDER_PREFIX}:beta`]: { authenticated: true },
+      anthropic: { authenticated: true },
+      defaultProvider: activeProviderId,
+      currentProvider: activeProviderId,
+      authenticatedProviders: [
+        activeProviderId,
+        `${EXTENSION_PROVIDER_PREFIX}:beta`,
+        "anthropic",
+      ],
+    },
+    activeProviderId,
+  ) as JsonObject;
+
+  assert.deepEqual(pruned, {
+    providers: {
+      [activeProviderId]: { authenticated: true },
+      anthropic: { authenticated: true },
+    },
+    [activeProviderId]: { authenticated: true },
+    anthropic: { authenticated: true },
+    defaultProvider: activeProviderId,
+    currentProvider: activeProviderId,
+    authenticatedProviders: [activeProviderId, "anthropic"],
+  });
 });
 
 test("getProviderCacheEntry returns the provider-specific models entry", () => {
@@ -708,7 +769,7 @@ test("default export is a callable extension registrar", () => {
   assert.equal(typeof registerExtension, "function");
 });
 
-test("startup registers all saved extension providers from config and cache", async () => {
+test("startup registers only the active provider's models from config and cache", async () => {
   const providerA = buildStoredConfig({
     name: "Alpha",
     baseUrl: "https://alpha.example/v1",
@@ -737,10 +798,8 @@ test("startup registers all saved extension providers from config and cache", as
 
   await registerTestExtension(harness);
 
-  assert.deepEqual(harness.state.registeredProviders, [
-    providerA.id,
-    providerB.id,
-  ]);
+  // Only the active provider should be registered
+  assert.deepEqual(harness.state.registeredProviders, [providerA.id]);
 });
 
 test("startup recovers provider registration from agent registry when config is missing", async () => {
@@ -1144,6 +1203,10 @@ test("refresh reports fetch failures without changing active provider state", as
   });
 
   await registerTestExtension(harness);
+  const authSyncsBefore = harness.state.syncAuthProviders.length;
+  const agentSyncsBefore = harness.state.syncAgentProviders.length;
+  const settingsSyncsBefore = harness.state.syncSettingsProviders.length;
+
   await harness.commands["openai-compatible-refresh"].handler("", harness.ctx);
 
   assert.equal(harness.state.config.activeProviderId, provider.id);
@@ -1152,6 +1215,15 @@ test("refresh reports fetch failures without changing active provider state", as
     "stable-model",
   );
   assert.deepEqual(harness.state.unregisteredProviders, []);
+  assert.equal(harness.state.syncAuthProviders.length, authSyncsBefore + 1);
+  assert.equal(harness.state.syncAgentProviders.length, agentSyncsBefore + 1);
+  assert.equal(
+    harness.state.syncSettingsProviders.length,
+    settingsSyncsBefore + 1,
+  );
+  assert.deepEqual(harness.state.syncAuthProviders.slice(-1), [provider.id]);
+  assert.deepEqual(harness.state.syncAgentProviders.slice(-1), [provider.id]);
+  assert.deepEqual(harness.state.syncSettingsProviders.slice(-1), [provider.id]);
   assert.ok(
     harness.state.notifications.some(
       (entry) => entry.message === "Refresh failed: refresh-boom",

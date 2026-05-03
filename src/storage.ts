@@ -16,8 +16,10 @@ import {
   AGENT_MODELS_PATH,
   AUTH_PATH,
   CONFIG_PATH,
+  EXTENSION_PROVIDER_PREFIX,
   MODELS_PATH,
   SETTINGS_PATH,
+  isExtensionProviderId,
   isRecord,
   toOptionalString,
 } from "./shared.ts";
@@ -153,13 +155,31 @@ export async function saveModelsRegistry(registry: unknown): Promise<void> {
   );
 }
 
+export function buildPrunedAgentModelsRegistry(
+  registry: unknown,
+  activeProviderId?: string,
+): AgentModelsRegistry {
+  const normalized = ensureAgentModelsRegistry(registry);
+  return {
+    providers: Object.fromEntries(
+      Object.entries(normalized.providers).filter(([providerId]) => {
+        return (
+          !providerId.startsWith(`${EXTENSION_PROVIDER_PREFIX}:`) ||
+          providerId === activeProviderId
+        );
+      }),
+    ),
+  };
+}
+
 export async function syncAgentModelsRegistry(
   providerId: string,
   config: ProviderProfile,
   models: ModelRecord[],
 ): Promise<void> {
-  const registry = ensureAgentModelsRegistry(
-    await loadJsonFile(AGENT_MODELS_PATH),
+  const registry = buildPrunedAgentModelsRegistry(
+    ensureAgentModelsRegistry(await loadJsonFile(AGENT_MODELS_PATH)),
+    providerId,
   );
   const nextRegistry = mergeProviderModelsRegistry(
     registry,
@@ -200,8 +220,46 @@ function buildAuthRecord(
   ) as AuthRecord;
 }
 
+export function buildPrunedAuthStore(
+  authStore: AuthStore,
+  activeProviderId?: string,
+): AuthStore {
+  const source = isRecord(authStore) ? authStore : {};
+  const providerEntries = isRecord(source.providers) ? source.providers : {};
+
+  const nextProviders = Object.fromEntries(
+    Object.entries(providerEntries).filter(([providerId]) => {
+      return !isExtensionProviderId(providerId) || providerId === activeProviderId;
+    }),
+  );
+
+  const nextTopLevel = Object.fromEntries(
+    Object.entries(source).filter(([key]) => {
+      if (key === "providers") return false;
+      if (!isExtensionProviderId(key)) return true;
+      return key === activeProviderId;
+    }),
+  );
+
+  const authenticatedProviders = Array.isArray(source.authenticatedProviders)
+    ? source.authenticatedProviders.filter(
+        (providerId): providerId is string =>
+          typeof providerId === "string" &&
+          (!isExtensionProviderId(providerId) || providerId === activeProviderId),
+      )
+    : undefined;
+
+  return Object.fromEntries(
+    Object.entries({
+      ...nextTopLevel,
+      providers: nextProviders,
+      authenticatedProviders,
+    }).filter(([, value]) => value !== undefined),
+  ) as AuthStore;
+}
+
 export async function syncAuthStore(config: ProviderProfile): Promise<void> {
-  const authStore = await loadAuthStore();
+  const authStore = buildPrunedAuthStore(await loadAuthStore(), config.id);
   const settings = await loadSettingsStore();
   const previousSelection = buildPreviousSelection(authStore, settings);
   const nextConfig = {
