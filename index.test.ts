@@ -100,7 +100,7 @@ test("getProviderId generates stable provider ids", () => {
 test("buildStoredConfigFromLegacy migrates single-provider config to version 2", () => {
   const migrated = buildStoredConfigFromLegacy({
     name: "diyproxy",
-    baseUrl: "https://diyproxy.fly.dev/v1",
+    baseUrl: "https://kvcman.fly.dev/v1",
     apiKey: "secret",
     defaultModelId: "gpt-5.5",
     previousProvider: "anthropic",
@@ -233,7 +233,7 @@ test("updateProviderLastModel stores the last selected model for the targeted pr
       providers: [
         buildStoredConfig({
           name: "diyproxy",
-          baseUrl: "https://diyproxy.fly.dev/v1",
+          baseUrl: "https://kvcman.fly.dev/v1",
           apiKey: "secret",
           defaultModelId: "gpt-5.4",
         }),
@@ -250,13 +250,13 @@ test("buildRegisteredProviderConfig prefixes model names with provider name", ()
   const provider = buildRegisteredProviderConfig(
     buildStoredConfig({
       name: "diyproxy",
-      baseUrl: "https://diyproxy.fly.dev/v1",
+      baseUrl: "https://kvcman.fly.dev/v1",
       apiKey: "secret",
     }),
     [{ id: "gpt-5.5", name: "gpt-5.5" }],
   );
 
-  assert.equal(provider.baseUrl, "https://diyproxy.fly.dev/v1");
+  assert.equal(provider.baseUrl, "https://kvcman.fly.dev/v1");
   assert.equal(provider.models[0].name, "diyproxy / gpt-5.5");
 });
 
@@ -265,7 +265,7 @@ test("buildWritableProviderCacheEntry strips secrets from cached model metadata"
     `${EXTENSION_PROVIDER_PREFIX}:diyproxy`,
     buildStoredConfig({
       name: "diyproxy",
-      baseUrl: "https://diyproxy.fly.dev/v1",
+      baseUrl: "https://kvcman.fly.dev/v1",
       apiKey: "secret",
       defaultModelId: "gpt-5.5",
     }),

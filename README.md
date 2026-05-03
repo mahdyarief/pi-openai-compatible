@@ -234,7 +234,7 @@ Useful commands:
 Example values:
 
 - provider name: `diyproxy`
-- base URL: `https://diyproxy.fly.dev/v1`
+- base URL: `https://kvcman.fly.dev/v1`
 - API key: `your-api-key`
 
 ## License

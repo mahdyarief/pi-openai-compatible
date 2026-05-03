@@ -222,7 +222,7 @@ export function buildRegisteredProviderConfig(
 ): RegisteredProviderConfig {
   const providerLabel = String(config.name || "OpenAI Compatible");
   const normalizedBaseUrl = normalizeBaseUrl(
-    String(config.baseUrl || "https://diyproxy.fly.dev/v1"),
+    String(config.baseUrl || "https://kvcman.fly.dev/v1"),
   );
 
   return {

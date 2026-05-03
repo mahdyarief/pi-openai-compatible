@@ -93,7 +93,7 @@ async function promptForConfig(
 
   const baseUrl = await ctx.ui.input(
     "Base URL",
-    defaults?.baseUrl || "https://diyproxy.fly.dev/v1",
+    defaults?.baseUrl || "https://kvcman.fly.dev/v1",
   );
   if (!baseUrl) return null;
 
